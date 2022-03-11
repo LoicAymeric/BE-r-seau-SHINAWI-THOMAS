@@ -264,12 +264,13 @@ int app_buffer_get(mic_tcp_payload app_buff)
 
 void app_buffer_put(mic_tcp_payload bf)
 {
+    
     /* Prepare a buffer entry to store the data */
     struct app_buffer_entry * entry = malloc(sizeof(struct app_buffer_entry));
     entry->bf.size = bf.size;
     entry->bf.data = malloc(bf.size);
     memcpy(entry->bf.data, bf.data, bf.size);
-
+    
     /* Lock a mutex to protect the buffer from corruption */
     pthread_mutex_lock(&lock);
 
@@ -303,6 +304,7 @@ void* listening(void* arg)
 
     while(1)
     {
+        
         pdu_tmp.payload.size = payload_size;
         recv_size = IP_recv(&pdu_tmp, &remote, 0);
 
