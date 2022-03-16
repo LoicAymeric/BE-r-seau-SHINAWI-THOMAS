@@ -1,5 +1,6 @@
 #include <mictcp.h>
 #include <api/mictcp_core.h>
+#define TIMEOUT 100
 
 /*
  * Permet de créer un socket entre l’application et MIC-TCP
@@ -7,13 +8,15 @@
  */
 
 mic_tcp_sock sock; 
+int PA = 0;
+int PE = 0; 
 
 int mic_tcp_socket(start_mode sm)
 {
    int result = -1;
    printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
    result = initialize_components(sm); /* Appel obligatoire */
-   set_loss_rate(0);
+   set_loss_rate(10);
 
    sock.fd = 1; 
    sock.state = CLOSED ; 
@@ -59,12 +62,27 @@ int mic_tcp_send (int mic_sock, char* mesg, int mesg_size)
 {
     printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
     if (sock.fd == mic_sock ) {
-        mic_tcp_header header = {0, 0, 0, 0, 0, 0, 0};
+
+        mic_tcp_header header = {0, 0, PE, 0, 0, 0, 0};
+        PE = (PE + 1)%2;
         mic_tcp_payload payload = {mesg, mesg_size}; 
         mic_tcp_pdu pdu = {header, payload};
         //mic_tcp_sock_addr addr = {"127.0.0.1", 4, 1234};
         mic_tcp_sock_addr addr; 
         IP_send(pdu, addr);
+        printf("\nEnvoi message, PE = %d \n", PE); 
+        mic_tcp_pdu ack;
+        ack.payload.size = 0; 
+        printf("avant la boucle\n");
+        while (IP_recv(&ack, &addr, TIMEOUT) == -1 && ack.header.ack_num != PE)
+        {
+            printf("Aïe je n'ai pas reçu de ack J'ATTENDS : %d \n", PE);
+            IP_send(pdu, addr);
+            printf("RENVOI du message, PE = %d \n", PE); 
+        }
+        printf("ACK reçu\n\n"); 
+        return 0;
+
     }
     else
     return -1;
@@ -109,9 +127,20 @@ int mic_tcp_close (int socket)
 void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_sock_addr addr)
 {
     printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
-    app_buffer_put(pdu.payload);
-    mic_tcp_header ack_header = {0, 0, 0, 0, 0, 1, 0}; 
-    mic_tcp_payload ack_payload = {"AH", 3}; 
+    int numSeq = pdu.header.seq_num;
+    printf("\nJ'ai reçu un message de n° : %d et j'attends : %d \n", numSeq, PA);
+    if (numSeq == PA)
+    {
+        app_buffer_put(pdu.payload);
+        PA = (PA + 1)%2;
+        printf("J'y mets dans le buffer \n ");
+    }
+    mic_tcp_header ack_header = {0, 0, 0, numSeq, 0, 1, 0}; 
+    ack_header.ack = 1;
+    ack_header.ack_num = numSeq;
+    mic_tcp_payload ack_payload = {"", 0}; 
     mic_tcp_pdu ack = {ack_header, ack_payload}; 
+    printf("J'envoi le ACK n° %d \n\n", numSeq); 
+
     IP_send(ack, addr);
 }
