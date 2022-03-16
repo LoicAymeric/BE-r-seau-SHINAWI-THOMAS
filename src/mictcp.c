@@ -1,6 +1,8 @@
 #include <mictcp.h>
 #include <api/mictcp_core.h>
 #define TIMEOUT 100
+#define MAXPERTES 2 
+
 
 /*
  * Permet de créer un socket entre l’application et MIC-TCP
@@ -10,13 +12,16 @@
 mic_tcp_sock sock; 
 int PA = 0;
 int PE = 0; 
+int nbPertesConsec =0;
+int perte = 0;
+
 
 int mic_tcp_socket(start_mode sm)
 {
    int result = -1;
    printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
    result = initialize_components(sm); /* Appel obligatoire */
-   set_loss_rate(10);
+   set_loss_rate(15);
 
    sock.fd = 1; 
    sock.state = CLOSED ; 
@@ -74,11 +79,26 @@ int mic_tcp_send (int mic_sock, char* mesg, int mesg_size)
         mic_tcp_pdu ack;
         ack.payload.size = 0; 
         printf("avant la boucle\n");
+        perte = 0;
+        nbP ++; 
         while (IP_recv(&ack, &addr, TIMEOUT) == -1 && ack.header.ack_num != PE)
-        {
-            printf("Aïe je n'ai pas reçu de ack J'ATTENDS : %d \n", PE);
-            IP_send(pdu, addr);
-            printf("RENVOI du message, PE = %d \n", PE); 
+        {   
+            perte = 1; 
+            nbPertesConsec ++; 
+            if (nbPertesConsec > MAXPERTES )
+            {
+                printf("Aïe je n'ai pas reçu de ack J'ATTENDS : %d \n", PE);
+                IP_send(pdu, addr);
+                printf("RENVOI du message, PE = %d \n", PE); 
+            }
+            else 
+            {
+                printf("J'ai rien reçu mais je m'en fou, j'ai %d pertes consecutives \n", nbPertesConsec);
+                break; 
+            }
+        }
+        if (nbPertesConsec > MAXPERTES || perte == 0) {
+            nbPertesConsec = 0;
         }
         printf("ACK reçu\n\n"); 
         return 0;
