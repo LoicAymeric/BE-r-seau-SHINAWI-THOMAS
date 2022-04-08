@@ -1,7 +1,6 @@
 #include <mictcp.h>
 #include <api/mictcp_core.h>
 #define TIMEOUT 10
-#define MAXPERTES 5
 
 
 /*
@@ -10,21 +9,33 @@
  */
 
 mic_tcp_sock sock; 
+
+//-----------------------------------------------------------
 int PA = 0;
 int PE = 0;
-int perte = 0;  
-int nbPertesConsec =0;
-float nbPertes = 0.0;
-float nbEnvois = 1.0;
-float tauxPertes = 0.2;
+int perte = 0; 
 
+int maxPertesConsec = 5;
+float tauxPertesAdmis = 0.001;
+int tauxPertesSimule = 20; //En pourcent
+ 
+int nbPertesConsec = 0;
+float nbSkip = 0.0; //nb de pertes admissibles    
+float nbMessages = 0.0; //nb d'envois sans les remises 
+
+float nbEnvois = 0.0; //nb total de messages envoyés (en comptant les remises)
+float nbPertes = 0.0; //nb totales de pertes
+
+int nbAcks = 0; 
+
+//-----------------------------------------------------------
 
 int mic_tcp_socket(start_mode sm)
 {
    int result = -1;
    printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
    result = initialize_components(sm); /* Appel obligatoire */
-   set_loss_rate(1);
+   set_loss_rate(tauxPertesSimule);
 
    sock.fd = 1; 
    sock.state = CLOSED ; 
@@ -68,7 +79,6 @@ int mic_tcp_connect(int socket, mic_tcp_sock_addr addr)
  */
 int mic_tcp_send (int mic_sock, char* mesg, int mesg_size)
 {
-    printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
     if (sock.fd == mic_sock ) {
         //---------INITIALISATION DU PDU-----------------
         mic_tcp_header header = {0, 0, PE, 0, 0, 0, 0};
@@ -79,43 +89,54 @@ int mic_tcp_send (int mic_sock, char* mesg, int mesg_size)
 
         //------------ENVOI DU PDU------------------------
         IP_send(pdu, addr);
-        printf("\nEnvoi message, PE = %d \n", PE); 
         mic_tcp_pdu ack;
         ack.payload.size = 0; 
-        printf("avant la boucle\n");
-        perte = 0;
+
+        perte = 0; //etat de perte
+        nbEnvois++;
+        nbMessages++;
+
+        //-------------CONSOLE--------------------
+        printf("[MICTCP] (Taux de pertes simulé : %d%, taux de pertes admis : %f%)\n", tauxPertesSimule, tauxPertesAdmis*100);
+        printf("Message n°%f, PE = %d\n", nbMessages, PE);
+        printf("%d pertes consécutives, taux de pertes actuel : %f\n", nbPertesConsec, nbSkip/nbMessages);
+        printf("%f messages reçus, %f pertes ignorées\n", nbEnvois-nbPertes, nbSkip);
+        printf("%f paquets envoyés, %f pertes recensées, %f paquets renvoyés\n", nbEnvois, nbPertes, nbEnvois-nbMessages);
+        printf("###############\n\n\n");
 
         //------------GESTION DES PERTES------------------
         while (IP_recv(&ack, &addr, TIMEOUT) == -1 && ack.header.ack_num != PE)
         {   
             perte = 1; //état de perte
-            nbPertesConsec ++; 
-            if (nbPertes/nbEnvois >= tauxPertes || nbPertesConsec > MAXPERTES) //Si on a un taux de perte trop important ou bien nous avons plusieurs erreurs consécutives
+            nbPertes++;
+            nbPertesConsec ++;
+
+            //Si la vidéo comporte trop de pertes
+            if (nbSkip/nbMessages >= tauxPertesAdmis || nbPertesConsec > maxPertesConsec)
             {
-                printf("Aïe je n'ai pas reçu de ack J'ATTENDS : %d \n", PE);
                 IP_send(pdu, addr); //renvoi du PDU
-                printf("RENVOI du message, PE = %d \n", PE); 
-                nbEnvois = 1.0; 
-                nbPertes = 0.0; //On remet à 0 ces variables pour avoir réinitialiser le taux
+                nbEnvois++;
             }
+
+            //Si on peut se permettre d'ignorer le paquet
             else 
             {
-                printf("J'ai rien reçu mais je m'en fou, j'ai %d pertes consecutives \n", nbPertesConsec);
                 PE = (PE + 1)%2;  //Réincrémentation de PE pour que le récepteur n'ait pas de problème de séquençage 
-                nbPertes ++;
+                nbSkip ++;
+                
+                
                 break; 
             }
         }
-        printf("TAUX DE PERTES ACTUEL : %f \n", nbPertes/nbEnvois);
-        printf("pertes : %f,  envois : %f\n", nbPertes, nbEnvois);
-        if (nbPertesConsec > MAXPERTES || perte == 0) { //Si nous n'avons pas de perte on remet à 0 les pertes conséqutives
+
+        if (nbPertesConsec > maxPertesConsec || perte == 0) { //Si nous n'avons pas de perte on remet à 0 les pertes conséqutives
             nbPertesConsec = 0;
         }
-        nbEnvois ++;
-        printf("ACK reçu\n\n"); 
+
         return 0;
 
     }
+
     else
     return -1;
 }
@@ -172,7 +193,9 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_sock_addr addr)
     ack_header.ack_num = numSeq;
     mic_tcp_payload ack_payload = {"", 0}; 
     mic_tcp_pdu ack = {ack_header, ack_payload}; 
-    printf("J'envoi le ACK n° %d \n\n", numSeq); 
+    printf("J'envoi le ACK n° %d \n", numSeq); 
 
     IP_send(ack, addr);
+    nbAcks++;
+    printf("J'ai envoyé %d acks\n\n", nbAcks);
 }
