@@ -1,6 +1,7 @@
 #include <mictcp.h>
 #include <api/mictcp_core.h>
-#define TIMEOUT 10
+#define TIMEOUT 5
+#define ECHECSMAX 3
 
 
 /*
@@ -9,6 +10,8 @@
  */
 
 mic_tcp_sock sock; 
+pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
+pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
 //-----------------------------------------------------------
 int PA = 0;
@@ -26,7 +29,10 @@ float nbMessages = 0.0; //nb d'envois sans les remises
 float nbEnvois = 0.0; //nb total de messages envoyés (en comptant les remises)
 float nbPertes = 0.0; //nb totales de pertes
 
-int nbAcks = 0; 
+int nbAcks = 0;
+
+int attentesServeur = 0; //% de pertes
+
 
 //-----------------------------------------------------------
 
@@ -37,7 +43,7 @@ int mic_tcp_socket(start_mode sm)
    result = initialize_components(sm); /* Appel obligatoire */
    set_loss_rate(tauxPertesSimule);
 
-   sock.fd = 1; 
+   sock.fd = result; 
    sock.state = CLOSED ; 
    if (result != -1) return sock.fd;
    else return -1; 
@@ -59,7 +65,10 @@ int mic_tcp_bind(int socket, mic_tcp_sock_addr addr)
  */
 int mic_tcp_accept(int socket, mic_tcp_sock_addr* addr)
 {
-    printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
+    sock.state = IDLE;
+
+    while (sock.state != ESTABLISHED) {pthread_cond_wait(&cond, &mutex);}
+    printf("---------CONNEXION ETABLIE---------\n\n");
     return 0;
 }
 
@@ -70,6 +79,55 @@ int mic_tcp_accept(int socket, mic_tcp_sock_addr* addr)
 int mic_tcp_connect(int socket, mic_tcp_sock_addr addr)
 {
     printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
+    int nbEchecs = 0; 
+
+    //---------INITIALISATION DU SYN-----------------
+    mic_tcp_header header = {0, 0, 0, 0, 0, 0, 0};
+    header.syn = 1; 
+    char attClient[3]; 
+    sprintf(attClient, "%d", tauxPertesSimule/2); 
+    mic_tcp_payload payload = {attClient, 3};
+    mic_tcp_pdu syn = {header, payload};
+    
+
+    //----------ENVOI SYN------------------
+    IP_send(syn, addr); 
+    sock.state = SYN_SENT;
+    printf("[MIC-TCP] Envoi du PDU SYN \n");
+    mic_tcp_pdu synack;
+    synack.payload.size = 0; 
+    while (IP_recv(&synack, &addr, TIMEOUT) == -1)
+    {
+        if (nbEchecs >= ECHECSMAX)
+        {
+            printf("CONNEXION IMPOSSIBLE AU BOUT DE PLUSIEURS ESSAIS\n");
+            return -1; 
+        }
+        nbEchecs++;
+
+        IP_send(syn, addr);
+        
+    }
+    if (synack.header.syn != 1 || synack.header.ack != 1)
+    {
+        printf("PAS DE SYNACK\n");
+        return -1; 
+    }
+    printf("[MIC-TCP] Reception d'un SYNACK\n");
+
+    //--------INIT TAUX DE PERTES-----------
+    int attFin = atoi(synack.payload.data);
+    tauxPertesAdmis = (float)attFin / 100.0;
+
+    //---------INITIALISATION DU ACK--------------
+   
+    header.syn = 0; 
+    header.ack = 1; 
+    mic_tcp_pdu ack = {header, payload};
+    printf("[MIC-TCP] Envoi du PDU ACK \n"); 
+    IP_send(ack, addr); 
+    printf("---------CONNEXION ETABLIE---------\n\n");
+    sock.state = ESTABLISHED; 
     return 0;
 }
 
@@ -180,22 +238,50 @@ int mic_tcp_close (int socket)
 void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_sock_addr addr)
 {
     printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
-    int numSeq = pdu.header.seq_num;
-    printf("\nJ'ai reçu un message de n° : %d et j'attends : %d \n", numSeq, PA);
-    if (numSeq == PA)
-    {
-        app_buffer_put(pdu.payload);
-        PA = (PA + 1)%2;
-        printf("J'y mets dans le buffer \n ");
-    }
-    mic_tcp_header ack_header = {0, 0, 0, numSeq, 0, 1, 0}; 
-    ack_header.ack = 1;
-    ack_header.ack_num = numSeq;
-    mic_tcp_payload ack_payload = {"", 0}; 
-    mic_tcp_pdu ack = {ack_header, ack_payload}; 
-    printf("J'envoi le ACK n° %d \n", numSeq); 
+    mic_tcp_header header = {0, 0, 0, 0, 0, 0, 0}; 
+    mic_tcp_payload payload = {"", 0};
+    mic_tcp_pdu ack;
+    mic_tcp_pdu synack;
 
-    IP_send(ack, addr);
-    nbAcks++;
-    printf("J'ai envoyé %d acks\n\n", nbAcks);
+    //DANS L'ETABLISSEMENT DE CONNEXION
+    if (sock.state != ESTABLISHED) {
+        if (pdu.header.syn == 1) {
+            header.syn = 1;
+            header.ack = 1;
+            synack.header = header;
+            int attClient = atoi(pdu.payload.data);
+            char attFin[3]; 
+            sprintf(attFin, "%d", (attentesServeur+attClient)/2);  
+            strcpy(payload.data, attFin); 
+            payload.size = 3;
+            synack.payload = payload; 
+            IP_send(synack, addr);
+            sock.state = SYN_RECEIVED;
+        }
+        else if (pdu.header.ack == 1) {
+            sock.state = ESTABLISHED;
+            pthread_cond_broadcast(&cond);
+        }
+    }
+
+    //DANS LE TRANSFERT DE DONNEES
+    else {
+        int numSeq = pdu.header.seq_num;
+        printf("\nJ'ai reçu un message de n° : %d et j'attends : %d \n", numSeq, PA);
+        if (numSeq == PA)
+        {
+            app_buffer_put(pdu.payload);
+            PA = (PA + 1)%2;
+            printf("J'y mets dans le buffer \n ");
+        }
+        
+        header.ack = 1;
+        header.ack_num = numSeq;    
+        ack.header = header;
+        ack.payload = payload; 
+        printf("J'envoi le ACK n° %d \n", numSeq); 
+        IP_send(ack, addr);
+        nbAcks++;
+        printf("J'ai envoyé %d acks\n\n", nbAcks);
+    }
 }
