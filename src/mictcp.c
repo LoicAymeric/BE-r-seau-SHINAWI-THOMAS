@@ -20,7 +20,7 @@ int perte = 0;
 
 int maxPertesConsec = 5;
 float tauxPertesAdmis = 0.001;
-int tauxPertesSimule = 20; //En pourcent
+int tauxPertesSimule = 10; //En pourcent
  
 int nbPertesConsec = 0;
 float nbSkip = 0.0; //nb de pertes admissibles    
@@ -84,9 +84,9 @@ int mic_tcp_connect(int socket, mic_tcp_sock_addr addr)
     //---------INITIALISATION DU SYN-----------------
     mic_tcp_header header = {0, 0, 0, 0, 0, 0, 0};
     header.syn = 1; 
-    char attClient[3]; 
+    char attClient[10]; 
     sprintf(attClient, "%d", tauxPertesSimule/2); 
-    mic_tcp_payload payload = {attClient, 3};
+    mic_tcp_payload payload = {attClient, 10};
     mic_tcp_pdu syn = {header, payload};
     
 
@@ -95,7 +95,8 @@ int mic_tcp_connect(int socket, mic_tcp_sock_addr addr)
     sock.state = SYN_SENT;
     printf("[MIC-TCP] Envoi du PDU SYN \n");
     mic_tcp_pdu synack;
-    synack.payload.size = 0; 
+    synack.payload.size = 10;
+    synack.payload.data = malloc(synack.payload.size);
     while (IP_recv(&synack, &addr, TIMEOUT) == -1)
     {
         if (nbEchecs >= ECHECSMAX)
@@ -104,7 +105,6 @@ int mic_tcp_connect(int socket, mic_tcp_sock_addr addr)
             return -1; 
         }
         nbEchecs++;
-
         IP_send(syn, addr);
         
     }
@@ -116,6 +116,7 @@ int mic_tcp_connect(int socket, mic_tcp_sock_addr addr)
     printf("[MIC-TCP] Reception d'un SYNACK\n");
 
     //--------INIT TAUX DE PERTES-----------
+    printf("Valeur négociée pour le taux de pertes admis : %s\n", synack.payload.data);
     int attFin = atoi(synack.payload.data);
     tauxPertesAdmis = (float)attFin / 100.0;
 
@@ -250,10 +251,10 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_sock_addr addr)
             header.ack = 1;
             synack.header = header;
             int attClient = atoi(pdu.payload.data);
-            char attFin[3]; 
+            char attFin[10]; 
             sprintf(attFin, "%d", (attentesServeur+attClient)/2);  
-            strcpy(payload.data, attFin); 
-            payload.size = 3;
+            payload.data = attFin; 
+            payload.size = 10;
             synack.payload = payload; 
             IP_send(synack, addr);
             sock.state = SYN_RECEIVED;

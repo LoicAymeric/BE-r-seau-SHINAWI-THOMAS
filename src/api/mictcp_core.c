@@ -136,7 +136,6 @@ int IP_recv(mic_tcp_pdu* pk, mic_tcp_sock_addr* addr, unsigned long timeout)
     /* Create a reception buffer */
     int buffer_size = API_HD_Size + pk->payload.size;
     char *buffer = malloc(buffer_size);
-
     if ((setsockopt(sys_socket, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv))) >= 0) {
        result = recvfrom(sys_socket, buffer, buffer_size, 0, (struct sockaddr *)&tmp_addr, &tmp_addr_size);
     }
@@ -146,7 +145,6 @@ int IP_recv(mic_tcp_pdu* pk, mic_tcp_sock_addr* addr, unsigned long timeout)
         memcpy (&(pk->header), buffer, API_HD_Size);
         pk->payload.size = result - API_HD_Size;
         memcpy (pk->payload.data, buffer + API_HD_Size, pk->payload.size);
-
         /* Generate a stub address */
         if (addr != NULL) {
             addr->ip_addr = "localhost";
