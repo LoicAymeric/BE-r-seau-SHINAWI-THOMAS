@@ -24,7 +24,7 @@ int tauxPertesSimule = 10; //En pourcent
  
 int nbPertesConsec = 0;
 float nbSkip = 0.0; //nb de pertes admissibles    
-float nbMessages = 0.0; //nb d'envois sans les remises 
+float nbMessages = 0.0; //nb d'envois sans les rémissions (par exemple si la vidéo est divisée en 10 paquets alors nbMessages sera égal à 10 à la fin de l'émission)
 
 float nbEnvois = 0.0; //nb total de messages envoyés (en comptant les remises)
 float nbPertes = 0.0; //nb totales de pertes
@@ -55,6 +55,7 @@ int mic_tcp_socket(start_mode sm)
  */
 int mic_tcp_bind(int socket, mic_tcp_sock_addr addr)
 {
+   //Connexion en locale donc on ne savait pas trop quoi faire pour cette fonction 
    printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
    return 0;
 }
@@ -66,7 +67,7 @@ int mic_tcp_bind(int socket, mic_tcp_sock_addr addr)
 int mic_tcp_accept(int socket, mic_tcp_sock_addr* addr)
 {
     sock.state = IDLE;
-
+    //Le programme s'endort en attendant que la connexion soit établie. Une fois établie il y a un broadcast et cette fonction se réveille
     while (sock.state != ESTABLISHED) {pthread_cond_wait(&cond, &mutex);}
     printf("---------CONNEXION ETABLIE---------\n\n");
     return 0;
@@ -84,7 +85,8 @@ int mic_tcp_connect(int socket, mic_tcp_sock_addr addr)
     //---------INITIALISATION DU SYN-----------------
     mic_tcp_header header = {0, 0, 0, 0, 0, 0, 0};
     header.syn = 1; 
-    char attClient[10]; 
+    char attClient[10];
+    //attentes du clients : la moitié du taux de pertes simulé sur le réseau 
     sprintf(attClient, "%d", tauxPertesSimule/2); 
     mic_tcp_payload payload = {attClient, 10};
     mic_tcp_pdu syn = {header, payload};
@@ -145,7 +147,7 @@ int mic_tcp_send (int mic_sock, char* mesg, int mesg_size)
         mic_tcp_payload payload = {mesg, mesg_size}; 
         mic_tcp_pdu pdu = {header, payload};
         mic_tcp_sock_addr addr; 
-
+ 
         //------------ENVOI DU PDU------------------------
         IP_send(pdu, addr);
         mic_tcp_pdu ack;
@@ -250,17 +252,23 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_sock_addr addr)
             header.syn = 1;
             header.ack = 1;
             synack.header = header;
+            //dans le premier paquet il y a les attentes du client (le taux de perte admissible qu'il compte offrir)
+            //ce que peux proposer le client est la moitié du taux de perte simulé dans le réseau
             int attClient = atoi(pdu.payload.data);
             char attFin[10]; 
+            //Le serveur est très éxigeant mais pour couper la poire en deux il fait la moyenne de ses attentes avec celles du client 
+            //c'est cette moyenne qui sera utilisé comme taux de perte admissible
             sprintf(attFin, "%d", (attentesServeur+attClient)/2);  
             payload.data = attFin; 
             payload.size = 10;
             synack.payload = payload; 
+            //envoi du synack
             IP_send(synack, addr);
             sock.state = SYN_RECEIVED;
         }
         else if (pdu.header.ack == 1) {
             sock.state = ESTABLISHED;
+            //réveil de mic_tcp_accept
             pthread_cond_broadcast(&cond);
         }
     }
@@ -268,21 +276,21 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_sock_addr addr)
     //DANS LE TRANSFERT DE DONNEES
     else {
         int numSeq = pdu.header.seq_num;
-        printf("\nJ'ai reçu un message de n° : %d et j'attends : %d \n", numSeq, PA);
+        printf("\nMessage n° : %d // n° attendu : %d \n", numSeq, PA);
         if (numSeq == PA)
         {
             app_buffer_put(pdu.payload);
             PA = (PA + 1)%2;
-            printf("J'y mets dans le buffer \n ");
+            printf("Numéro de séquence ok ! Le message est mis dans le buffer\n ");
         }
         
         header.ack = 1;
         header.ack_num = numSeq;    
         ack.header = header;
         ack.payload = payload; 
-        printf("J'envoi le ACK n° %d \n", numSeq); 
+        printf("Envoi du ACK n° %d \n", numSeq); 
         IP_send(ack, addr);
         nbAcks++;
-        printf("J'ai envoyé %d acks\n\n", nbAcks);
+        printf("Nombre de ACK envoyés : %d \n\n", nbAcks);
     }
 }
